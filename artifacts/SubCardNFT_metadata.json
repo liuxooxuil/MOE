@@ -347,6 +347,25 @@
 				"inputs": [
 					{
 						"internalType": "address",
+						"name": "",
+						"type": "address"
+					}
+				],
+				"name": "hasPaidActivationFee",
+				"outputs": [
+					{
+						"internalType": "bool",
+						"name": "",
+						"type": "bool"
+					}
+				],
+				"stateMutability": "view",
+				"type": "function"
+			},
+			{
+				"inputs": [
+					{
+						"internalType": "address",
 						"name": "holder",
 						"type": "address"
 					}
@@ -442,6 +461,13 @@
 					}
 				],
 				"stateMutability": "view",
+				"type": "function"
+			},
+			{
+				"inputs": [],
+				"name": "payActivationFee",
+				"outputs": [],
+				"stateMutability": "payable",
 				"type": "function"
 			},
 			{
@@ -645,6 +671,23 @@
 				"outputs": [],
 				"stateMutability": "nonpayable",
 				"type": "function"
+			},
+			{
+				"inputs": [
+					{
+						"internalType": "address",
+						"name": "fundAddress",
+						"type": "address"
+					}
+				],
+				"name": "withdrawActivationFee",
+				"outputs": [],
+				"stateMutability": "nonpayable",
+				"type": "function"
+			},
+			{
+				"stateMutability": "payable",
+				"type": "receive"
 			}
 		],
 		"devdoc": {
@@ -959,11 +1002,11 @@
 			]
 		},
 		"contracts/test2/SubCardNFT.sol": {
-			"keccak256": "0x4e180e7b8ebca91ba7b99d8bc02646f08ba27cf56bb366614e3d09d800929d61",
+			"keccak256": "0x8d1165b789f3672de0c05bcda7f00748561fffd51f5c078fb0c5a5acd4cc5a1c",
 			"license": "MIT",
 			"urls": [
-				"bzz-raw://15e0d14e56de4b6860936e220c9db77dff5b96061f4531000ed22f9aa66a7e07",
-				"dweb:/ipfs/QmVykwot4w4Xuwi3jhde1RLfVXtwUTFEH1FZd6ZnkfF2KS"
+				"bzz-raw://13e7d651e908bc7f0d68ef3afe598d032ca7b1621144ee907920416955c7611f",
+				"dweb:/ipfs/QmYhTpmovjvWVcaT2aTn7Cam9KCBM1RurucrWhB3dXdQtA"
 			]
 		}
 	},

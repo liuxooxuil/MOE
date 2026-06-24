@@ -232,9 +232,13 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 interface IROMANToken {
     function getUserStatus(address user) external view returns (uint256 bnbTotal, bool isBuy, bool staticDrawStatus);
+}
+interface INFTActivation {
+    function hasPaidActivationFee(address user) external view returns (bool);
 }
 
 contract DividendDistributor is Ownable {
@@ -342,70 +346,151 @@ contract DividendDistributor is Ownable {
         emit Activated(user, mainTokenId, subTokenId);
     }
 
-    function claim() external {
-        address user = msg.sender;
-        uint256 mainId = activeMainTokenId[user];
-        uint256 subId = activeSubTokenId[user];
+    // function claim() external {
+    //     address user = msg.sender;
+    //     uint256 mainId = activeMainTokenId[user];
+    //     uint256 subId = activeSubTokenId[user];
 
-        require(mainId != 0 || subId != 0, "No active NFT");
+    //     require(mainId != 0 || subId != 0, "No active NFT");
 
-        uint256 totalUsdt = 0;
-        uint256 totalRoman = 0;
-        uint256 totalBnb = 0;
+    //     uint256 totalUsdt = 0;
+    //     uint256 totalRoman = 0;
+    //     uint256 totalBnb = 0;
 
-        uint256 totalActive = totalActiveMain + totalActiveSub;
-        if (totalActive == 0) return;
+    //     uint256 totalActive = totalActiveMain + totalActiveSub;
+    //     if (totalActive == 0) return;
 
-        // USDT from trading fees (70% main / 30% sub)
-        if (feeUsdtPool > 0 && totalActiveMain + totalActiveSub > 0) {
-            if (mainId != 0 && totalActiveMain > 0) {
-                totalUsdt += (feeUsdtPool * 70) / 100 / totalActiveMain;
-            }
-            if (subId != 0 && totalActiveSub > 0) {
-                totalUsdt += (feeUsdtPool * 30) / 100 / totalActiveSub;
-            }
-        }
+    //     // USDT from trading fees (70% main / 30% sub)
+    //     if (feeUsdtPool > 0 && totalActiveMain + totalActiveSub > 0) {
+    //         if (mainId != 0 && totalActiveMain > 0) {
+    //             totalUsdt += (feeUsdtPool * 70) / 100 / totalActiveMain;
+    //         }
+    //         if (subId != 0 && totalActiveSub > 0) {
+    //             totalUsdt += (feeUsdtPool * 30) / 100 / totalActiveSub;
+    //         }
+    //     }
 
-        // ROMAN from anti-dump + hash game
-        uint256 totalRomanPool = antiDumpRomanPool + hashGameRomanPool;
-        if (totalRomanPool > 0 && totalActiveMain + totalActiveSub > 0) {
-            if (mainId != 0 && totalActiveMain > 0) {
-                totalRoman += (totalRomanPool * 70) / 100 / totalActiveMain;
-            }
-            if (subId != 0 && totalActiveSub > 0) {
-                totalRoman += (totalRomanPool * 30) / 100 / totalActiveSub;
-            }
-        }
+    //     // ROMAN from anti-dump + hash game
+    //     uint256 totalRomanPool = antiDumpRomanPool + hashGameRomanPool;
+    //     if (totalRomanPool > 0 && totalActiveMain + totalActiveSub > 0) {
+    //         if (mainId != 0 && totalActiveMain > 0) {
+    //             totalRoman += (totalRomanPool * 70) / 100 / totalActiveMain;
+    //         }
+    //         if (subId != 0 && totalActiveSub > 0) {
+    //             totalRoman += (totalRomanPool * 30) / 100 / totalActiveSub;
+    //         }
+    //     }
 
-        // BNB from investment 3%
-        if (investBnbPool > 0 && totalActiveMain + totalActiveSub > 0) {
-            if (mainId != 0 && totalActiveMain > 0) {
-                totalBnb += (investBnbPool * 70) / 100 / totalActiveMain;
-            }
-            if (subId != 0 && totalActiveSub > 0) {
-                totalBnb += (investBnbPool * 30) / 100 / totalActiveSub;
-            }
-        }
+    //     // BNB from investment 3%
+    //     if (investBnbPool > 0 && totalActiveMain + totalActiveSub > 0) {
+    //         if (mainId != 0 && totalActiveMain > 0) {
+    //             totalBnb += (investBnbPool * 70) / 100 / totalActiveMain;
+    //         }
+    //         if (subId != 0 && totalActiveSub > 0) {
+    //             totalBnb += (investBnbPool * 30) / 100 / totalActiveSub;
+    //         }
+    //     }
 
-        // Transfer
-        if (totalUsdt > 0) {
-            IERC20(usdt).transfer(user, totalUsdt);
-        }
-        if (totalRoman > 0) {
-            IERC20(address(romanToken)).transfer(user, totalRoman);
-        }
-        if (totalBnb > 0) {
-            payable(user).transfer(totalBnb);
-        }
+    //     // Transfer
+    //     if (totalUsdt > 0) {
+    //         IERC20(usdt).transfer(user, totalUsdt);
+    //     }
+    //     if (totalRoman > 0) {
+    //         IERC20(address(romanToken)).transfer(user, totalRoman);
+    //     }
+    //     if (totalBnb > 0) {
+    //         payable(user).transfer(totalBnb);
+    //     }
 
-        // Update pools (simplified reset for ROMAN pools)
-        feeUsdtPool -= totalUsdt;
-        antiDumpRomanPool = 0;
-        hashGameRomanPool = 0;
-        investBnbPool -= totalBnb;
+    //     // Update pools (simplified reset for ROMAN pools)
+    //     feeUsdtPool -= totalUsdt;
+    //     antiDumpRomanPool = 0;
+    //     hashGameRomanPool = 0;
+    //     investBnbPool -= totalBnb;
 
-        emit Claimed(user, totalUsdt, totalRoman, totalBnb);
+    //     emit Claimed(user, totalUsdt, totalRoman, totalBnb);
+    // }
+function claim() external {
+    address user = msg.sender;
+
+    // ==================== 1. 检查是否持有 NFT ====================
+    bool hasMainNFT = (mainNFT != address(0)) && (IERC721(mainNFT).balanceOf(user) > 0);
+    bool hasSubNFT  = (subNFT  != address(0)) && (IERC721(subNFT).balanceOf(user) > 0);
+
+    require(hasMainNFT || hasSubNFT, "You must hold MainCardNFT or SubCardNFT");
+
+    // ==================== 2. 检查是否已支付 0.2 BNB 激活费 ====================
+    bool paidMain = false;
+    bool paidSub  = false;
+
+    if (hasMainNFT && mainNFT != address(0)) {
+        paidMain = INFTActivation(mainNFT).hasPaidActivationFee(user);
     }
+
+    if (hasSubNFT && subNFT != address(0)) {
+        paidSub = INFTActivation(subNFT).hasPaidActivationFee(user);
+    }
+
+    require(paidMain || paidSub, "You must pay 0.2 BNB activation fee to NFT contract first");
+
+    // ==================== 3. 原有计算逻辑（保留你的方式） ====================
+    uint256 totalUsdt = 0;
+    uint256 totalRoman = 0;
+    uint256 totalBnb = 0;
+
+    uint256 totalActive = totalActiveMain + totalActiveSub;
+    if (totalActive == 0) return;
+
+    // USDT from trading fees (70% main / 30% sub)
+    if (feeUsdtPool > 0 && totalActiveMain + totalActiveSub > 0) {
+        if (paidMain && totalActiveMain > 0) {
+            totalUsdt += (feeUsdtPool * 70) / 100 / totalActiveMain;
+        }
+        if (paidSub && totalActiveSub > 0) {
+            totalUsdt += (feeUsdtPool * 30) / 100 / totalActiveSub;
+        }
+    }
+
+    // ROMAN from anti-dump + hash game
+    uint256 totalRomanPool = antiDumpRomanPool + hashGameRomanPool;
+    if (totalRomanPool > 0 && totalActiveMain + totalActiveSub > 0) {
+        if (paidMain && totalActiveMain > 0) {
+            totalRoman += (totalRomanPool * 70) / 100 / totalActiveMain;
+        }
+        if (paidSub && totalActiveSub > 0) {
+            totalRoman += (totalRomanPool * 30) / 100 / totalActiveSub;
+        }
+    }
+
+    // BNB from investment 3%
+    if (investBnbPool > 0 && totalActiveMain + totalActiveSub > 0) {
+        if (paidMain && totalActiveMain > 0) {
+            totalBnb += (investBnbPool * 70) / 100 / totalActiveMain;
+        }
+        if (paidSub && totalActiveSub > 0) {
+            totalBnb += (investBnbPool * 30) / 100 / totalActiveSub;
+        }
+    }
+
+    // ==================== 4. 转账 ====================
+    if (totalUsdt > 0) {
+        IERC20(usdt).transfer(user, totalUsdt);
+    }
+    if (totalRoman > 0) {
+        IERC20(address(romanToken)).transfer(user, totalRoman);
+    }
+    if (totalBnb > 0) {
+        payable(user).transfer(totalBnb);
+    }
+
+    // ==================== 5. 更新池子 ====================
+    feeUsdtPool -= totalUsdt;
+    antiDumpRomanPool = 0;
+    hashGameRomanPool = 0;
+    investBnbPool -= totalBnb;
+
+    emit Claimed(user, totalUsdt, totalRoman, totalBnb);
+}
 
     function emergencyWithdraw(address token, uint256 amount) external onlyOwner {
         if (token == address(0)) {
@@ -416,7 +501,7 @@ contract DividendDistributor is Ownable {
     }
 }
 
-// Minimal IERC721 interface for activation check
-interface IERC721 {
-    function ownerOf(uint256 tokenId) external view returns (address);
-}
+// // Minimal IERC721 interface for activation check
+// interface IERC721 {
+//     function ownerOf(uint256 tokenId) external view returns (address);
+// }

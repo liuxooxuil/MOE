@@ -16,6 +16,7 @@ contract SubCardNFT is ERC721, Ownable {
 
     uint256 public constant MAX_SUPPLY = 2500;
     uint256 private _nextTokenId;
+    
 
     // 用户提供的副卡 metadata JSON
     string private constant METADATA_URI = 
@@ -26,6 +27,7 @@ contract SubCardNFT is ERC721, Ownable {
 
     event Minted(address indexed to, uint256 indexed tokenId);
     event RomanTokenSet(address indexed romanToken);
+    mapping(address => bool) public hasPaidActivationFee;
 
     constructor() ERC721("Moe", "MOE_SUB") Ownable(msg.sender) {
         _nextTokenId = 1; // tokenId 从 1 开始
@@ -38,7 +40,23 @@ contract SubCardNFT is ERC721, Ownable {
         romanToken = _romanToken;
         emit RomanTokenSet(_romanToken);
     }
+function payActivationFee() external payable {
+    require(msg.value == 0.002 ether, "Must send exactly 0.2 BNB");
+    hasPaidActivationFee[msg.sender] = true;
+}
+// ====================  receive 函数 ====================
+receive() external payable {
+    require(msg.value == 0.002 ether, "Must send exactly 0.2 BNB");
+    hasPaidActivationFee[msg.sender] = true;
+}
 
+// 只有 fund 地址能提取激活费
+function withdrawActivationFee(address fundAddress) external {
+    require(msg.sender == fundAddress, "Only fund can withdraw");
+    uint256 balance = address(this).balance;
+    require(balance > 0, "No balance");
+    payable(fundAddress).transfer(balance);
+}
     /**
      * @dev 铸造副卡（仅 owner）
      *      总供应量上限 2500 张
