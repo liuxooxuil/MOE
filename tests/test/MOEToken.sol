@@ -1,0 +1,495 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
+import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Pair.sol";
+import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
+import "./INFT.sol";
+import "./Pool.sol";
+
+contract MOEToken is ERC20, Ownable {
+    IUniswapV2Router02 public immutable _uniswapV2Router;
+    address public _uniswapPair;
+
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    mapping(address => mapping(address => bool)) public preUps;
+    mapping(address => EnumerableSet.AddressSet) private upsChildList;
+
+    mapping(address => uint256) public usersBuyTime;
+    mapping(address => User) public users;
+
+    address public WBNB;
+    address public nft;
+    address public fundAddress;
+    address public feeAddress;
+
+    address[] public nodes;
+    Pool public pool;
+
+    bool public fused; 
+    uint256 public FUSE_THRESHOLD = 21_000_000e18;
+
+    uint256 public nftRewardTotal;
+    uint256 public fundRewardTotal;
+
+    uint256 public MIN_AMOUNT = 0.1 ether;
+    uint256 constant BIND_AMOUNT = 2 ether;
+    uint256 constant BACK_AMOUNT = 1 ether;
+    uint256 constant START_AMOUNT = 1 ether;
+    uint256 constant WITHDRAW_AMOUNT = 10 ether;
+    uint256 public startTime;
+
+    address private inviteAddress = 0x5B6453Ea3f0e6f975f7440884257037F72a7c33b;
+
+    bool inSwap;
+    bool firstAdd = true;
+
+    uint256 private _reentrancyStatus = 1;
+
+    // ==================== 新增静态与防爆相关 ====================
+    uint256 public constant POOL_THRESHOLD = 100_000_000 * 1e18;
+    uint256 public constant STATIC_DAILY_RATE_HIGH = 1600;
+    uint256 public constant STATIC_DAILY_RATE_LOW = 1000;
+    uint256 public constant STATIC_MAX_DAYS_HIGH = 125;
+    uint256 public constant STATIC_MAX_DAYS_LOW = 200;
+    uint256 public constant STATIC_CAP_MULTIPLIER = 3;
+
+    mapping(address => uint256) public staticStartTime;
+    mapping(address => uint256) public totalStaticClaimed;
+    mapping(address => uint256) public lastClaimTokenAmount;
+    mapping(address => uint256) public validDirectCount;
+
+    struct User {
+        address up;
+        uint256 bnbTotal;
+        uint256 lpTotal;
+        uint256 staticDrawAt;
+        uint256 directTotal;
+        uint256 directBuyTotal;
+        uint256 validTotal;
+        bool staticDrawStatus;
+        bool isBuy;
+    }
+
+    error NodeAlreadyExist();
+    error InvalidTransfer();
+
+    event BindEvent(address indexed up, address indexed down);
+    event InvestEvent(address indexed invite, uint256 amount);
+    event StaticRewardClaimed(address indexed user, uint256 amount);
+    event FuseStatusChanged(bool fused);
+
+    modifier nonReentrant() {
+        require(_reentrancyStatus == 1, "ReentrancyGuard");
+        _reentrancyStatus = 2;
+        _;
+        _reentrancyStatus = 1;
+    }
+
+    constructor(address user_, address fund_, address fee_) ERC20("MOEToken", "MOE") Ownable(msg.sender) {
+        _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+        WBNB = _uniswapV2Router.WETH();
+        _uniswapPair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), WBNB);
+        fundAddress = fund_;
+        feeAddress = fee_;
+        pool = new Pool();
+        startTime = 1772796447;
+        _mint(user_, 1_000_000_000 * 10 ** decimals());
+    }
+
+    // ==================== 投资入口（已按新规则修改） ====================
+    receive() external payable nonReentrant {
+        address up = users[msg.sender].up;
+        uint256 value = msg.value;
+        if (msg.sender == tx.origin) {
+            if (value >= MIN_AMOUNT && (up != address(0) || msg.sender == inviteAddress)) {
+                if (!users[msg.sender].isBuy) {
+                    users[msg.sender].isBuy = true;
+                    if (up != address(0)) {
+                        users[up].validTotal += 1;
+                        if (value >= 0.2 ether) validDirectCount[up] += 1;
+                    }
+                }
+                // 新规则拆分
+                uint256 toNFT = value * 5 / 100;
+                uint256 toProject = value * 5 / 100;
+                uint256 toLP = value * 90 / 100;
+
+                if (toNFT > 0) safeTransferETH(nft, toNFT);
+                if (toProject > 0) safeTransferETH(fundAddress, toProject);
+
+                uint256 liquidity = swapAndAddLiquidity(toLP / 2);
+                users[msg.sender].bnbTotal += value;
+                users[msg.sender].lpTotal += liquidity;
+                staticStartTime[msg.sender] = block.timestamp; // 设置静态开始时间
+
+                emit InvestEvent(msg.sender, value);
+                return;
+            }
+            revert NodeAlreadyExist();
+        }
+    }
+
+    function _update(address from, address to, uint256 value) internal virtual override {
+        if (value == BIND_AMOUNT && !preUps[to][from] && isCanBindInviter(from, to)) {
+            preUps[from][to] = true;
+        }
+        if (value == BACK_AMOUNT && preUps[to][from] && users[from].up == address(0)) {
+            users[from].up = to;
+            upsChildList[to].add(from);
+            emit BindEvent(from, to);
+        }
+
+        // 静态领取（转1个代币）
+        if (msg.sender == from && users[from].isBuy && to == address(this) && value == START_AMOUNT) {
+            if (fused) revert("Fused");
+            processStaticReward(from);
+            return;
+        }
+
+        // 提现（新撤池子规则）
+        if (msg.sender == from && users[from].isBuy && to == address(this) && value == WITHDRAW_AMOUNT) {
+            _withdraw(from);
+            return super._update(from, to, value);
+        }
+
+        if (from == address(this) || to == address(this) || from == address(pool) || to == address(pool)) {
+            return super._update(from, to, value);
+        }
+
+        // 买入 3%
+        if (from == _uniswapPair) {
+            require(startTime < block.timestamp, "startTime");
+            usersBuyTime[tx.origin] = block.timestamp;
+
+            if (isRemoveLiquidity() > 0) {
+                uint256 _burnAmount;
+                uint256 poolTokenAmount = getPoolTokenAmount();
+                if (poolTokenAmount >= 1_000_000_000e18) _burnAmount = (value * 9) / 10;
+                else if (poolTokenAmount >= 500_000_000e18) _burnAmount = (value * 6) / 10;
+                else if (poolTokenAmount >= 100_000_000e18) _burnAmount = (value * 4) / 10;
+                else if (poolTokenAmount >= 50_000_000e18) _burnAmount = (value * 2) / 10;
+                else _burnAmount = value;
+
+                super._update(from, address(0xdead), _burnAmount);
+                if (value > _burnAmount) super._update(from, to, value - _burnAmount);
+                return;
+            } else {
+                require(value < getCirculation() * 5 / 100, "max token");
+                uint256 fee = (value * 300) / 10000;
+                uint256 nftAmount = (fee * 70) / 100;
+                uint256 burnAmount = (fee * 10) / 100;
+                uint256 fundAmount = fee - nftAmount - burnAmount;
+
+                nftRewardTotal += nftAmount;
+                super._update(from, address(0xdead), burnAmount);
+                super._update(from, fundAddress, fundAmount);
+                value -= fee;
+            }
+        }
+
+        // 卖出 3% 或 29%
+        if (to == _uniswapPair) {
+            if (firstAdd) {
+                IUniswapV2Pair p = IUniswapV2Pair(_uniswapPair);
+                (uint112 reserve0, uint112 reserve1, ) = p.getReserves();
+                if (reserve0 == 0 && reserve1 == 0 && firstAdd) {
+                    firstAdd = false;
+                    return super._update(from, to, value);
+                }
+            }
+
+            require(usersBuyTime[tx.origin] < block.timestamp - 10, "cd");
+
+            if (isAddLiquidity(value) > 0) {
+            } else {
+                require(startTime < block.timestamp, "startTime");
+                require(value < getCirculation() * 10 / 100, "max token");
+
+                uint256 feeRate = 300;
+                if (isPriceDump()) feeRate = 2900;
+
+                uint256 fee = (value * feeRate) / 10000;
+                uint256 nftAmount = (fee * 70) / 100;
+                uint256 burnAmount = (fee * 10) / 100;
+                uint256 fundAmount = fee - nftAmount - burnAmount;
+
+                nftRewardTotal += nftAmount;
+                super._update(from, address(0xdead), burnAmount);
+                super._update(from, fundAddress, fundAmount);
+
+                if (feeRate > 300) {
+                    uint256 excess = (value * (feeRate - 300)) / 10000;
+                    super._update(from, address(this), excess / 2);
+                    nftRewardTotal += excess / 2;
+                }
+                value -= fee;
+                sellFee();
+            }
+        }
+        fusing();
+        super._update(from, to, value);
+    }
+
+    function isPriceDump() public view returns (bool) {
+        return false; // TODO: 接入 Chainlink
+    }
+    
+    function processStaticReward(address user) internal nonReentrant {
+        User storage _user = users[user];
+        require(_user.isBuy, "User has not bought");
+
+        uint256 poolToken = getPoolTokenAmount();
+        uint256 dailyRate = poolToken >= POOL_THRESHOLD ? STATIC_DAILY_RATE_HIGH : STATIC_DAILY_RATE_LOW;
+        uint256 maxDays = poolToken >= POOL_THRESHOLD ? STATIC_MAX_DAYS_HIGH : STATIC_MAX_DAYS_LOW;
+
+        uint256 daysPassed = (block.timestamp - staticStartTime[user]) / 1 days;
+        if (daysPassed > maxDays) daysPassed = maxDays;
+
+        uint256 reward = (_user.bnbTotal * dailyRate * daysPassed) / (10000 * 365);
+        uint256 alreadyClaimed = totalStaticClaimed[user];
+        uint256 maxReward = _user.bnbTotal * STATIC_CAP_MULTIPLIER;
+
+        if (alreadyClaimed + reward > maxReward) {
+            reward = maxReward - alreadyClaimed;
+        }
+        require(reward > 0, "No static reward available");
+
+        uint256 half = reward / 2;
+        uint256 tokenPart = getBNBForTokenAmount(half);
+        uint256 lpPart = distributeLPReward(tokenPart);
+
+        // 转出奖励
+        super._update(address(this), user, tokenPart);
+        IERC20(_uniswapPair).transfer(user, lpPart);
+
+        totalStaticClaimed[user] += reward;
+
+        // 返回上次转入的代币（优化写法，减少栈深度）
+        uint256 lastToken = lastClaimTokenAmount[user];
+        if (lastToken > 0) {
+            super._update(address(this), user, lastToken);
+        }
+        lastClaimTokenAmount[user] = START_AMOUNT;
+
+        emit StaticRewardClaimed(user, reward);
+    }
+
+    // ==================== 新版撤池子规则 ====================
+    function _withdraw(address user) internal {
+        User storage u = users[user];
+        require(u.lpTotal > 0, "No LP");
+
+        uint256 poolToken = getPoolTokenAmount();
+        uint256 feeRate = poolToken >= POOL_THRESHOLD ? 5000 : 2000; // 50% 或 20%
+
+        uint256 fee = (u.lpTotal * feeRate) / 10000;
+        uint256 toUser = u.lpTotal - fee;
+
+        if (fee > 0) IERC20(_uniswapPair).transfer(address(this), fee);
+        if (toUser > 0) IERC20(_uniswapPair).transfer(user, toUser);
+
+        u.lpTotal = 0;
+        u.bnbTotal = 0;
+        u.isBuy = false;
+        u.staticDrawStatus = false;
+        staticStartTime[user] = 0;
+        totalStaticClaimed[user] = 0;
+    }
+
+    // ==================== 以下为原始所有函数（完整保留） ====================
+    function isCanBindInviter(address from, address to) public view returns (bool) { /* 原有代码不变 */ 
+        if (users[from].up == address(0) && from != inviteAddress && to != _uniswapPair && from != _uniswapPair) return false;
+        if (preUps[from][to] || from == to) return false;
+        address current = to;
+        uint8 depth = 0;
+        while (current != address(0) && depth < 25) {
+            if (current == from) return false;
+            current = users[current].up;
+            depth++;
+        }
+        return true;
+    }
+
+    function getUpsChildList(address account) public view returns (address[] memory) {
+        return upsChildList[account].values();
+    }
+
+    function safeTransferETH(address to, uint256 value) internal {
+        (bool success, ) = to.call{value: value}(new bytes(0));
+    }
+
+    function getBNBForTokenAmount(uint256 bnbAmount) internal view returns (uint256 totalWbnb) {
+        address[] memory path = new address[](2);
+        path[0] = WBNB; path[1] = address(this);
+        uint256[] memory amounts = _uniswapV2Router.getAmountsOut(bnbAmount, path);
+        totalWbnb = amounts[1];
+    }
+
+    function distributeLPReward(uint256 reward) internal returns (uint256 lpAmount) {
+        uint half = reward / 2;
+        address[] memory path = new address[](2);
+        path[0] = address(this); path[1] = WBNB;
+        super._update(_uniswapPair, address(this), reward);
+        IUniswapV2Pair(_uniswapPair).sync();
+        _approve(address(this), address(_uniswapV2Router), reward);
+        _uniswapV2Router.swapExactTokensForTokensSupportingFeeOnTransferTokens(half, 0, path, address(pool), block.timestamp);
+        uint256 wbnbAmount = IERC20(WBNB).balanceOf(address(pool));
+        pool.claimToken(WBNB, address(this), wbnbAmount);
+        IERC20(WBNB).approve(address(_uniswapV2Router), wbnbAmount);
+        (, , lpAmount) = _uniswapV2Router.addLiquidity(WBNB, address(this), wbnbAmount, half, 0, 0, address(this), block.timestamp);
+    }
+
+    function fusing() public {
+        IUniswapV2Pair p = IUniswapV2Pair(_uniswapPair);
+        (uint112 reserve0, uint112 reserve1, ) = p.getReserves();
+        if (reserve0 == 0 || reserve1 == 0) return;
+        address token0 = p.token0();
+        uint256 tokenReserve = token0 == address(this) ? reserve0 : reserve1;
+        bool newFused = tokenReserve < FUSE_THRESHOLD;
+        if (newFused != fused) {
+            fused = newFused;
+            emit FuseStatusChanged(fused);
+        }
+    }
+
+    function getPoolTokenAmount() public view returns (uint256) {
+        IUniswapV2Pair p = IUniswapV2Pair(_uniswapPair);
+        (uint112 reserve0, uint112 reserve1, ) = p.getReserves();
+        address token0 = p.token0();
+        return token0 == address(this) ? reserve0 : reserve1;
+    }
+
+    function getCirculation() public view returns (uint256) {
+        return totalSupply() - balanceOf(address(0xdead));
+    }
+
+    function calculateRewardRates() public view returns (uint256, uint256, uint256, uint256) {
+        uint256 poolTokenAmount = getPoolTokenAmount();
+        if (poolTokenAmount > 1_000_000_000e18) return (1500, 750, 300, 60);
+        else if (poolTokenAmount > 500_000_000e18) return (1250, 625, 300, 60);
+        else if (poolTokenAmount > 100_000_000e18) return (1000, 500, 300, 60);
+        else return (500, 250, 300, 60);
+    }
+
+    function calculateStaticReward(address user) public view returns (uint256) {
+        User memory _user = users[user];
+        if (!_user.isBuy || block.timestamp < staticStartTime[user]) return 0;
+        uint256 poolToken = getPoolTokenAmount();
+        uint256 rate = poolToken >= POOL_THRESHOLD ? STATIC_DAILY_RATE_HIGH : STATIC_DAILY_RATE_LOW;
+        uint256 daysPassed = (block.timestamp - staticStartTime[user]) / 1 days;
+        return (_user.bnbTotal * rate * daysPassed) / (10000 * 365);
+    }
+
+    function getDynamicRewardRate(uint256 generation) public pure returns (uint256) {
+        if (generation == 1) return 10;
+        if (generation == 2) return 5;
+        if (generation == 3) return 3;
+        if (generation >= 4 && generation <= 17) return 1;
+        if (generation == 18) return 3;
+        if (generation == 19) return 5;
+        if (generation == 20) return 10;
+        return 0;
+    }
+
+    function calculateDynamicReward(address user, uint256 staticReward) internal returns (uint256 sendTotal) {
+        address current = users[user].up;
+        uint256 generation = 1;
+        while (current != address(0) && generation <= 20) {
+            uint256 rate = getDynamicRewardRate(generation);
+            uint256 reward = (staticReward * rate) / 100;
+            if (reward > 0 && validDirectCount[current] >= generation) {
+                IERC20(_uniswapPair).transfer(current, reward);
+                sendTotal += reward;
+            }
+            current = users[current].up;
+            generation++;
+        }
+    }
+
+    function setStartTime(uint256 startTime_) external onlyOwner { startTime = startTime_; }
+    function setNFT(address _nft) external onlyOwner { nft = _nft; }
+
+    function sellFee() internal {
+        uint256 amount = nftRewardTotal + fundRewardTotal;
+        if (amount < 1e18) return;
+        _approve(address(this), address(_uniswapV2Router), amount);
+        address[] memory path = new address[](2);
+        path[0] = address(this); path[1] = WBNB;
+        _uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(amount, 0, path, address(this), block.timestamp);
+        safeTransferETH(feeAddress, (address(this).balance * fundRewardTotal) / amount);
+        safeTransferETH(nft, address(this).balance);
+        nftRewardTotal = 0;
+        fundRewardTotal = 0;
+    }
+
+    function isAddLiquidity(uint256 amount) internal view returns (uint256 lpAmount) {
+        if (msg.sender == address(_uniswapV2Router)) {
+            (uint256 reservesWBNB, uint256 reservesToken, ) = IUniswapV2Pair(_uniswapPair).getReserves();
+            uint256 balanceWBNB = IERC20(WBNB).balanceOf(_uniswapPair);
+            if (balanceWBNB > reservesWBNB) {
+                uint256 t = IUniswapV2Pair(_uniswapPair).totalSupply();
+                if (t == 0) return 1;
+                t = t + (getFeeLP(t, balanceWBNB, reservesToken));
+                lpAmount = min(((balanceWBNB - reservesWBNB) * t) / reservesWBNB, (amount * t) / reservesToken);
+            }
+        }
+    }
+
+    function isRemoveLiquidity() internal view returns (uint256 lpAmount) {
+        (uint256 reservesWBNB, , ) = IUniswapV2Pair(_uniswapPair).getReserves();
+        uint256 balanceWBNB = IERC20(WBNB).balanceOf(_uniswapPair);
+        if (reservesWBNB > balanceWBNB) {
+            uint256 t = IUniswapV2Pair(_uniswapPair).totalSupply();
+            lpAmount = (t * (reservesWBNB - balanceWBNB)) / balanceWBNB;
+        }
+    }
+
+    function getFeeLP(uint256 t, uint256 reservesWBNB, uint256 reservesToken) internal view returns (uint256 amount) {
+        uint256 rootK = sqrt(reservesWBNB * reservesToken);
+        uint256 rootKLast = sqrt(IUniswapV2Pair(_uniswapPair).kLast());
+        if (rootK > rootKLast) {
+            uint256 numerator = t * (rootK - rootKLast) * 8;
+            uint256 denominator = rootK * 17 + rootKLast * 8;
+            amount = numerator / denominator;
+        }
+    }
+
+    function sediment() external {
+        IERC20(WBNB).transfer(_uniswapPair, IERC20(WBNB).balanceOf(address(this)));
+        IUniswapV2Pair(_uniswapPair).sync();
+    }
+
+    function min(uint256 x, uint256 y) internal pure returns (uint256 z) { z = x < y ? x : y; }
+
+    function sqrt(uint y) internal pure returns (uint z) {
+        if (y > 3) {
+            z = y; uint x = y / 2 + 1;
+            while (x < z) { z = x; x = (y / x + x) / 2; }
+        } else if (y != 0) { z = 1; }
+    }
+
+    function swapAndAddLiquidity(uint256 amount) internal returns (uint256 liquidity) {
+        address[] memory path = new address[](2);
+        path[0] = WBNB; path[1] = address(this);
+        _uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(0, path, address(pool), block.timestamp);
+        uint256 _swapTotal = balanceOf(address(pool));
+        super._update(address(pool), address(this), _swapTotal);
+        _approve(address(this), address(_uniswapV2Router), _swapTotal);
+        (, , liquidity) = _uniswapV2Router.addLiquidityETH{value: amount}(address(this), _swapTotal, 0, 0, address(this), block.timestamp);
+    }
+
+    function swapTokenAndAddLiquidity(uint256 amount) internal returns (uint256 liquidity) {
+        address[] memory path = new address[](2);
+        path[0] = address(this); path[1] = WBNB;
+        _uniswapV2Router.swapExactTokensForTokensSupportingFeeOnTransferTokens(amount, 0, path, address(pool), block.timestamp);
+        uint256 _swapTotal = balanceOf(address(pool));
+        super._update(address(pool), address(this), _swapTotal);
+        (, , liquidity) = _uniswapV2Router.addLiquidityETH{value: amount}(address(this), _swapTotal, 0, 0, address(0xdead), block.timestamp);
+    }
+}

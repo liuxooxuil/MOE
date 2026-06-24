@@ -1,0 +1,53 @@
+{
+	"compiler": {
+		"version": "0.8.34+commit.80d5c536"
+	},
+	"language": "Solidity",
+	"output": {
+		"abi": [
+			{
+				"inputs": [],
+				"name": "process",
+				"outputs": [],
+				"stateMutability": "nonpayable",
+				"type": "function"
+			}
+		],
+		"devdoc": {
+			"kind": "dev",
+			"methods": {},
+			"version": 1
+		},
+		"userdoc": {
+			"kind": "user",
+			"methods": {},
+			"version": 1
+		}
+	},
+	"settings": {
+		"compilationTarget": {
+			"contracts/INFT.sol": "INFT"
+		},
+		"evmVersion": "osaka",
+		"libraries": {},
+		"metadata": {
+			"bytecodeHash": "ipfs"
+		},
+		"optimizer": {
+			"enabled": true,
+			"runs": 200
+		},
+		"remappings": []
+	},
+	"sources": {
+		"contracts/INFT.sol": {
+			"keccak256": "0x37cd9680b559d23ba504894052e531b8052137f2e25a09d66ffc360983288e2a",
+			"license": "UNLICENSED",
+			"urls": [
+				"bzz-raw://a9d8dcd0ae84b3bf4c356aec716b305d6f87651ea9324c9269197f9d738a1daf",
+				"dweb:/ipfs/QmRjSYtekAcCAe9g2nrhcQWoz7DUVU6gDW8WT2EbmtzGvE"
+			]
+		}
+	},
+	"version": 1
+}
