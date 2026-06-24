@@ -377,6 +377,61 @@ contract ROMANToken1 is ERC20, Ownable {
         }
     }
 
+//     function _playHashGame(address player, uint256 amount) internal {
+//     // ==================== 多熵源混合（增强抗操纵能力） ====================
+//     bytes32 hash1 = blockhash(block.number - 1);
+//     bytes32 hash2 = blockhash(block.number - 2);
+
+//     // 混合多个随机源
+//     bytes32 combinedHash = keccak256(abi.encodePacked(
+//         hash1,
+//         hash2,
+//         block.timestamp,
+//         block.prevrandao,      // PoS 链的重要随机源
+//         player,
+//         amount,
+//         block.number
+//     ));
+
+//     // 取最后一个字节的个位数作为判断依据
+//     uint8 hashDigit = uint8(combinedHash[31]) % 10;
+//     bool hashEven = (hashDigit % 2 == 0);
+//     // ================================================================
+
+//     // 根据投注金额最后一位判断单双
+//     uint256 lastDigit = amount % 10;
+//     bool betEven = (lastDigit % 2 == 0);
+
+//     bool win = (betEven == hashEven);
+//     uint256 payout = amount * 2;
+
+//     // 哈希游戏入单扣 5%
+//     uint256 nftShare = (amount * 5) / 100;
+//     uint256 betAfterFee = amount - nftShare;
+
+//     if (dividendDistributor != address(0) && nftShare > 0) {
+//         super._update(player, dividendDistributor, nftShare);
+//     }
+
+//     super._update(player, address(this), betAfterFee);
+
+//     if (win) {
+//         uint256 contractBal = balanceOf(address(this));
+//         if (contractBal >= payout) {
+//             super._update(address(this), player, payout);
+//             emit HashGamePlayed(player, amount, true, payout);
+//         } else {
+//             if (contractBal > 0) {
+//                 super._update(address(this), player, contractBal);
+//             }
+//             gameStopped = true;
+//             emit HashGamePlayed(player, amount, true, contractBal);
+//         }
+//     } else {
+//         emit HashGamePlayed(player, amount, false, 0);
+//     }
+// }
+
     function setWhitelist(address account, bool status) external onlyOwner {
         whitelist[account] = status;
     }
