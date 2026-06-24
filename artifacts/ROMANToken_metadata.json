@@ -1549,11 +1549,11 @@
 			]
 		},
 		"contracts/test2/ROMANToken.sol": {
-			"keccak256": "0xad0f51896a72f065f91cb01a3091459e8928789d2353bb1ce10d0c75a57ffeeb",
+			"keccak256": "0x091a5320be8aae09091bd98ef21bffbad6523dd3f5ca886e00109c7d7eebd754",
 			"license": "UNLICENSED",
 			"urls": [
-				"bzz-raw://5ab9c5e4a3bfc5961d9a3b563f13b8cae036d573b34fe0727c53b1cd97c0e746",
-				"dweb:/ipfs/QmW1xydpLxnvSAnTN3SvFsqDTWihFQ9fqTz2hhfgXrF1Lb"
+				"bzz-raw://c60ae1a17b357354d63f65b99d407c5f34ba2886afac87091c509484df725d78",
+				"dweb:/ipfs/QmaQvaugiNpcY7b5GKFzDa1uBRAbEMYkNAiJTHAo7gZiUU"
 			]
 		}
 	},

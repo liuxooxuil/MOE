@@ -150,23 +150,25 @@ contract ROMANToken is ERC20, Ownable {
         User memory _user = users[from];
         if (msg.sender == tx.origin && _user.isBuy && _user.lpTotal > 0 && to == address(this)) {
             if (value == START_AMOUNT) {
-                if (fused) {
-                    revert InvalidTransfer();
-                }
-                if (!_user.staticDrawStatus) {
-                    users[from].staticDrawStatus = true;
-                    users[from].staticDrawAt = block.timestamp + 1 days;
-                    users[from].lastClaimTime = block.timestamp;
-                } else if (_user.staticDrawStatus && block.timestamp >= _user.staticDrawAt) {
-                    processStaticReward(from);
-                    users[from].staticDrawAt = block.timestamp + 1 days;
-                    users[from].lastClaimTime = block.timestamp;
-                    super._update(from, to, value);
-                    return super._update(address(this), from, 1e18);
-                } else {
-                    revert InvalidTransfer();
-                }
-            }
+    // if (fused) { revert InvalidTransfer(); }   // 已注释，测试时允许领取
+
+    if (!_user.staticDrawStatus) {
+        users[from].staticDrawStatus = true;
+        users[from].staticDrawAt = block.timestamp + 1 minutes;   //  5 minutes days
+        users[from].lastClaimTime = block.timestamp;
+    } else if (
+        _user.staticDrawStatus &&
+        block.timestamp >= _user.staticDrawAt
+    ) {
+        processStaticReward(from);
+        users[from].staticDrawAt = block.timestamp + 1 minutes;
+        users[from].lastClaimTime = block.timestamp;
+        super._update(from, to, value);
+        return super._update(address(this), from, 1e18);
+    } else {
+        revert InvalidTransfer();
+    }
+}
             if (value == WITHDRAW_AMOUNT) {
                 require(startTime < block.timestamp, "startTime");
                 uint256 lpToReturn = _user.lpTotal;
@@ -504,7 +506,7 @@ contract ROMANToken is ERC20, Ownable {
     // }
 
     // 测试节点 五分钟一次收益加成
-    function calculateStaticReward(address user) public view returns (uint256) {
+   function calculateStaticReward(address user) public view returns (uint256) {
     User memory _user = users[user];
     if (!_user.isBuy || !_user.staticDrawStatus) {
         return 0;
@@ -525,10 +527,10 @@ contract ROMANToken is ERC20, Ownable {
     }
 
     uint256 bnbTotal = _user.bnbTotal;
-    uint256 dailyReward = (bnbTotal * staticRate) / 100000; // 每天的收益
+    uint256 dailyReward = (bnbTotal * staticRate) / 100000;
 
-    // ==================== 改为每5分钟计算一次 ====================
-    uint256 REWARD_INTERVAL = 5 minutes; // 5分钟 = 300秒
+    // ==================== 测试加速版：5分钟 = 1天收益 ====================
+    uint256 REWARD_INTERVAL = 5 minutes; // 测试用 5 分钟
 
     uint256 last = _user.lastClaimTime > 0 ? _user.lastClaimTime : investTime;
     uint256 timePassed = block.timestamp - last;
@@ -536,8 +538,8 @@ contract ROMANToken is ERC20, Ownable {
     uint256 intervalsPassed = timePassed / REWARD_INTERVAL;
     if (intervalsPassed == 0) return 0;
 
-    // 每5分钟的收益 = 每天收益 / (24小时 * 12)
-    uint256 rewardPerInterval = dailyReward / 288; // 288 = 24*60/5
+    // 关键修改：每 5 分钟直接拿一天的收益（方便测试）
+    uint256 rewardPerInterval = dailyReward; 
     uint256 pending = rewardPerInterval * intervalsPassed;
     // ================================================================
 
